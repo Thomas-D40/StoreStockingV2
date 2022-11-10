@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans" xmlns:batch="http://www.springframework.org/schema/batch" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="
+   http://www.springframework.org/schema/beans
+   https://www.springframework.org/schema/beans/spring-beans.xsd
+   http://www.springframework.org/schema/batch
+   https://www.springframework.org/schema/batch/spring-batch.xsd">
+
+	<!-- ........................................................................................................................... -->
+	<!-- JOB -->
+	<!-- ........................................................................................................................... -->
+
+
+	<batch:job id="OrderHandlerJob" restartable="true">
+
+		<!-- Step 1 -->
+		<!-- Vérification des fichiers d'entrée (simple tasklet) -->
+
+		<batch:step id="checkingFileStep">
+			<batch:tasklet>
+				<bean id="checkingFileExtensionTasklet" class="com.tom.store.tasklet.CheckingFileExtensionTasklet" />
+			</batch:tasklet>
+			<batch:fail on="FAILED" />
+			<batch:next on="*" to="checkingJsonDataStep" />
+		</batch:step>
+
+		<!-- Step  2 -->
+		<!-- Vérification des données d'entrée (simple tasklet) -->
+
+		<batch:step id="checkingJsonDataStep">
+			<batch:tasklet>
+				<bean id="checkingJsonFiles" class="com.tom.store.tasklet.CheckingJsonFiles" />
+			</batch:tasklet>
+			<batch:fail on="FAILED" />
+			<batch:next on="*" to="retrievingFromJsonStep" />
+		</batch:step>
+
+		<!-- Step  3 -->
+		<!-- Enregistrement des données du JSON dans la DB -->
+
+		<batch:step id="retrievingFromJsonStep">
+			<batch:tasklet>
+				<batch:chunk reader="jsonOrderReader" processor="orderSavingProcessor" writer="orderJpaWriter" commit-interval="3" />
+			</batch:tasklet>
+			<batch:fail on="FAILED" />
+			<batch:next on="*" to="substractingOrderFromStock" />
+		</batch:step>
+
+		<!-- Step  4 -->
+		<!-- Soustraction des produits des orders du stock -->
+		<batch:step id="substractingOrderFromStock">
+			<batch:tasklet>
+				<batch:chunk reader="substractingOrderjdbc" processor="substractingOrderProcessor" writer="stockJdbcWriter" commit-interval="3" />
+			</batch:tasklet>
+			<batch:end on="COMPLETED" />
+			<batch:fail on="*" />
+		</batch:step>
+
+	</batch:job>
+
+	<!-- ........................................................................................................................... -->
+	<!-- READERS -->
+	<!-- ........................................................................................................................... -->
+
+
+	<!-- JSON ORDER READER -->
+
+	<bean id="jsonOrderReader" class="org.springframework.batch.item.file.MultiResourceItemReader">
+		<property name="resources" value="classpath:Orders/*.json" />
+		<property name="delegate" ref="singleJsonReader" />
+	</bean>
+
+	<bean id="jsonReaderFactory" class="com.tom.store.readers.JsonOrderReaderFactory" />
+
+	<bean id="singleJsonReader" factory-bean="jsonReaderFactory" factory-method="jsonReader" />
+
+	<!-- SUBSTRACTING READER -->
+
+	<bean id="substractingOrderjdbc" class="org.springframework.batch.item.database.JdbcCursorItemReader">
+		<property name="dataSource" ref="productDataSource" />
+		<property name="sql" value="select stock_products.quantity as stock_quantity, stock_products.id as stock_id, order_id, sum(products.quantity) as product_quantity
+				from stock_products inner join products on stock_products.ref_number = products.ref_number group by stock_products.ref_number" />
+		<property name="rowMapper">
+			<bean class="com.tom.store.services.SubstractingOrderRowMapper" />
+		</property>
+	</bean>
+
+	<!-- ........................................................................................................................... -->
+	<!-- PROCESSORS -->
+	<!-- ........................................................................................................................... -->
+
+	<bean id="orderSavingProcessor" class="com.tom.store.processor.OrderSavingProcessor" />
+
+	<bean id="substractingOrderProcessor" class="com.tom.store.processor.SubstractingOrderFromStockProcessor" />
+
+	<!-- ........................................................................................................................... -->
+	<!-- WRITERS -->
+	<!-- ........................................................................................................................... -->
+
+	<bean id="orderJpaWriter" class="org.springframework.batch.item.database.JpaItemWriter">
+		<property name="entityManagerFactory" ref="entityManagerFactory" />
+	</bean>
+
+	<bean id="entityManagerFactory" class="org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean">
+		<property name="dataSource" ref="productDataSource" />
+		<property name="jpaVendorAdapter">
+			<bean class="org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter" />
+		</property>
+		<property name="persistenceUnitName" value="orderEntities" />
+		<property name="jpaDialect">
+			<bean class="org.springframework.orm.jpa.vendor.HibernateJpaDialect" />
+		</property>
+	</bean>
+
+	<bean id="stockJdbcWriterFactory" class="com.tom.store.writer.StockJdbcWriterFactory" />
+
+	<bean id="stockJdbcWriter" factory-bean="stockJdbcWriterFactory" factory-method="stockJdbcBatchItemWriter" />
+
+
+	<!-- ........................................................................................................................... -->
+	<!-- PROTOTYPE -->
+	<!-- ........................................................................................................................... -->
+
+
+</beans>
